@@ -8,9 +8,11 @@ interface DashboardScreenProps {
   isConfigured: boolean;
   linkTokenPreview: string | null;
   onConnectPlaid: () => void | Promise<void>;
+  onSignOut?: () => void | Promise<void>;
   signals: SpendingSignal[];
   syncMessage: string;
   transactions: Transaction[];
+  userEmail?: string | null;
 }
 
 function getDiscretionarySpend(transactions: Transaction[]) {
@@ -41,9 +43,11 @@ export function DashboardScreen({
   isConfigured,
   linkTokenPreview,
   onConnectPlaid,
+  onSignOut,
   signals,
   syncMessage,
   transactions,
+  userEmail,
 }: DashboardScreenProps) {
   const discretionarySpend = getDiscretionarySpend(transactions);
   const safeToSpend = Math.max(0, 1200 - discretionarySpend);
@@ -61,6 +65,16 @@ export function DashboardScreen({
           React Native front end, Supabase auth + RLS, Plaid transaction sync, and edge analytics
           tuned for fast user-scoped reads.
         </Text>
+        {userEmail ? (
+          <View style={styles.sessionRow}>
+            <Text style={styles.sessionText}>Signed in as {userEmail}</Text>
+            {onSignOut ? (
+              <Pressable onPress={onSignOut} style={styles.signOutButton}>
+                <Text style={styles.signOutButtonText}>Sign out</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
 
         <View style={styles.metricsRow}>
           <View style={styles.metricCard}>
@@ -226,6 +240,30 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     marginHorizontal: -6,
     marginBottom: 20,
+  },
+  sessionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  sessionText: {
+    color: '#8CA0C1',
+    flex: 1,
+    fontSize: 13,
+    marginRight: 12,
+  },
+  signOutButton: {
+    borderColor: '#29406B',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  signOutButtonText: {
+    color: '#F8FAFC',
+    fontSize: 12,
+    fontWeight: '800',
   },
   metricCard: {
     flexGrow: 1,

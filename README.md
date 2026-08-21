@@ -12,6 +12,7 @@ Impulse Coach is a React Native fintech coaching app built with Expo, TypeScript
 ## What is included
 
 - A mobile-first dashboard for discretionary spend, recent transactions, and coaching signals
+- A built-in Supabase email/password auth flow with persisted sessions
 - Supabase client wiring for authenticated edge-function calls
 - PostgreSQL schema with strict per-user data isolation through RLS
 - Plaid edge functions for link token creation, public-token exchange, transaction sync, and insight generation

@@ -1,12 +1,15 @@
 import 'react-native-url-polyfill/auto';
 
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Session } from '@supabase/supabase-js';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
 import { appConfig, isSupabaseConfigured } from './src/config/env';
 import { mockSignals, mockTransactions } from './src/data/mock';
 import { createLinkToken } from './src/lib/plaid';
+import { supabase } from './src/lib/supabase';
+import { AuthScreen } from './src/screens/AuthScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 
 const initialSyncMessage = isSupabaseConfigured
@@ -14,8 +17,40 @@ const initialSyncMessage = isSupabaseConfigured
   : 'Add the values from .env.example to enable Supabase auth, Plaid sync, and edge functions.';
 
 export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [isSessionLoading, setIsSessionLoading] = useState(isSupabaseConfigured);
   const [syncMessage, setSyncMessage] = useState(initialSyncMessage);
   const [linkTokenPreview, setLinkTokenPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!supabase) {
+      setIsSessionLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setSession(data.session);
+      setIsSessionLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setIsSessionLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const handlePlaidConnect = async () => {
     if (!isSupabaseConfigured) {
@@ -45,6 +80,37 @@ export default function App() {
     }
   };
 
+  const handleSignOut = async () => {
+    if (!supabase) {
+      return;
+    }
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      Alert.alert('Sign out failed', error.message);
+    }
+  };
+
+  if (isSessionLoading) {
+    return (
+      <View style={styles.loadingShell}>
+        <StatusBar style="light" />
+        <ActivityIndicator color="#F97360" size="large" />
+        <Text style={styles.loadingText}>Restoring your secure session...</Text>
+      </View>
+    );
+  }
+
+  if (isSupabaseConfigured && !session) {
+    return (
+      <View style={styles.appShell}>
+        <StatusBar style="light" />
+        <AuthScreen isConfigured={isSupabaseConfigured} />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.appShell}>
       <StatusBar style="light" />
@@ -53,9 +119,11 @@ export default function App() {
         isConfigured={isSupabaseConfigured}
         linkTokenPreview={linkTokenPreview}
         onConnectPlaid={handlePlaidConnect}
+        onSignOut={session ? handleSignOut : undefined}
         signals={mockSignals}
         syncMessage={syncMessage}
         transactions={mockTransactions}
+        userEmail={session?.user.email ?? null}
       />
     </View>
   );
@@ -65,5 +133,17 @@ const styles = StyleSheet.create({
   appShell: {
     flex: 1,
     backgroundColor: '#081226',
+  },
+  loadingShell: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#081226',
+    paddingHorizontal: 24,
+  },
+  loadingText: {
+    color: '#B9C5DB',
+    fontSize: 15,
+    marginTop: 14,
   },
 });
