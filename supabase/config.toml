@@ -1,0 +1,17 @@
+project_id = "impulse-coach"
+
+[api]
+enabled = true
+schemas = ["public", "storage", "graphql_public"]
+
+[functions.plaid-link-token]
+verify_jwt = true
+
+[functions.plaid-exchange-public-token]
+verify_jwt = true
+
+[functions.plaid-sync-transactions]
+verify_jwt = true
+
+[functions.coach-insights]
+verify_jwt = true
