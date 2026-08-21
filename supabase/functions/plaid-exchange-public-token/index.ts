@@ -1,5 +1,6 @@
 import { corsHeaders, json } from '../_shared/cors.ts';
 import { getServiceClient, requireUser } from '../_shared/auth.ts';
+import { encryptString } from '../_shared/crypto.ts';
 import { plaidRequest } from '../_shared/plaid.ts';
 
 interface ExchangeTokenResponse {
@@ -58,10 +59,12 @@ Deno.serve(async (request) => {
     }
 
     const service = getServiceClient();
+    const encryptedAccessToken = await encryptString(exchange.access_token);
     const { error } = await service.from('plaid_items').upsert(
       {
         user_id: user.id,
         plaid_item_id: exchange.item_id,
+        encrypted_access_token: encryptedAccessToken,
         institution_name: institutionName,
         status: 'active',
       },
@@ -75,7 +78,6 @@ Deno.serve(async (request) => {
     return json({
       item_id: exchange.item_id,
       institution_name: institutionName,
-      access_token: exchange.access_token,
       request_id: exchange.request_id,
     });
   } catch (error) {

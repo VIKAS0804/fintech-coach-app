@@ -46,3 +46,6 @@ supabase/.env
 # generated native folders
 /ios
 /android
+
+# Supabase CLI temp
+supabase/.temp/

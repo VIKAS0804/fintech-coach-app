@@ -5,22 +5,34 @@ import { Session } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
+import { PlaidLinkLauncher } from './src/components/PlaidLinkLauncher';
 import { appConfig, isSupabaseConfigured } from './src/config/env';
 import { mockSignals, mockTransactions } from './src/data/mock';
-import { createLinkToken } from './src/lib/plaid';
+import {
+  exchangePublicToken,
+  fetchCoachingSignals,
+  fetchLinkedInstitutions,
+  fetchRecentTransactions,
+  syncTransactions,
+} from './src/lib/plaid';
 import { supabase } from './src/lib/supabase';
 import { AuthScreen } from './src/screens/AuthScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
+import type { LinkedInstitution, SpendingSignal, Transaction } from './src/types/fintech';
 
 const initialSyncMessage = isSupabaseConfigured
-  ? 'Supabase keys detected. Generate a Plaid link token to start live bank syncing.'
+  ? 'Supabase keys detected. Sign in, connect a bank with Plaid, and sync live transaction data.'
   : 'Add the values from .env.example to enable Supabase auth, Plaid sync, and edge functions.';
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [isSessionLoading, setIsSessionLoading] = useState(isSupabaseConfigured);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState(initialSyncMessage);
   const [linkTokenPreview, setLinkTokenPreview] = useState<string | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>(mockTransactions);
+  const [signals, setSignals] = useState<SpendingSignal[]>(mockSignals);
+  const [linkedInstitutions, setLinkedInstitutions] = useState<LinkedInstitution[]>([]);
 
   useEffect(() => {
     if (!supabase) {
@@ -52,31 +64,130 @@ export default function App() {
     };
   }, []);
 
-  const handlePlaidConnect = async () => {
-    if (!isSupabaseConfigured) {
-      Alert.alert(
-        'Supabase config missing',
-        'Create a local .env file from .env.example and add your EXPO_PUBLIC_SUPABASE_URL plus EXPO_PUBLIC_SUPABASE_ANON_KEY.',
-      );
+  useEffect(() => {
+    if (!session || !isSupabaseConfigured) {
+      setTransactions(mockTransactions);
+      setSignals(mockSignals);
+      setLinkedInstitutions([]);
+      return;
+    }
+
+    void refreshDashboardData();
+  }, [session]);
+
+  const refreshDashboardData = async () => {
+    if (!session || !isSupabaseConfigured) {
       return;
     }
 
     try {
-      setSyncMessage('Requesting a fresh Plaid link token from the Supabase edge function...');
-      const payload = await createLinkToken('ios');
-      setLinkTokenPreview(payload.link_token);
+      const [recentTransactions, signalResponse, institutions] = await Promise.all([
+        fetchRecentTransactions(),
+        fetchCoachingSignals(),
+        fetchLinkedInstitutions(),
+      ]);
+
+      setTransactions(recentTransactions);
+      setSignals(signalResponse.signals);
+      setLinkedInstitutions(institutions);
+
+      if (institutions.length === 0) {
+        setSyncMessage('No linked banks yet. Use Plaid Link to connect your first institution.');
+      } else {
+        setSyncMessage(
+          `Connected ${institutions.length} institution${institutions.length === 1 ? '' : 's'}. Latest sync flagged ${signalResponse.summary.signalsFlagged} coaching signals.`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setSyncMessage(`Live dashboard refresh is blocked: ${message}`);
+    }
+  };
+
+  const handlePlaidSuccess = async ({
+    accountsCount,
+    institutionName,
+    publicToken,
+  }: {
+    accountsCount: number;
+    institutionName: string | null;
+    linkSessionId: string | null;
+    publicToken: string;
+  }) => {
+    try {
+      setIsSyncing(true);
+      setSyncMessage('Exchanging the Plaid public token on the server...');
+      const exchange = await exchangePublicToken(publicToken);
+
+      setSyncMessage('Public token exchanged. Syncing live transactions...');
+      const syncResponse = await syncTransactions({
+        itemId: exchange.item_id,
+      });
+
+      await refreshDashboardData();
+      setLinkTokenPreview(null);
       setSyncMessage(
-        'Plaid link token ready. Wire it into the Plaid Link SDK on device to complete account linking.',
+        `Connected ${exchange.institution_name ?? institutionName ?? 'your institution'}. Synced ${syncResponse.transactions_upserted} transactions and flagged ${syncResponse.signals_flagged} signals.`,
       );
+
       Alert.alert(
-        'Plaid token ready',
-        'The backend returned a live link token. Next step: launch Plaid Link and exchange the public token through the included edge functions.',
+        'Bank connected',
+        `Linked ${accountsCount} account${accountsCount === 1 ? '' : 's'} and synced ${syncResponse.transactions_upserted} transactions.`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      setLinkTokenPreview(null);
-      setSyncMessage(`Plaid setup is blocked: ${message}`);
-      Alert.alert('Plaid setup failed', message);
+      setSyncMessage(`Plaid sync is blocked: ${message}`);
+      Alert.alert('Plaid sync failed', message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleRefreshSync = async () => {
+    if (!isSupabaseConfigured || !session) {
+      Alert.alert('Supabase config missing', 'Add your project keys before refreshing live data.');
+      return;
+    }
+
+    if (linkedInstitutions.length === 0) {
+      Alert.alert('No linked banks', 'Connect a bank with Plaid before running a live sync.');
+      return;
+    }
+
+    try {
+      setIsSyncing(true);
+      setSyncMessage('Refreshing linked institutions from Plaid...');
+
+      const results = await Promise.all(
+        linkedInstitutions.map((institution) =>
+          syncTransactions({
+            itemId: institution.plaidItemId,
+          }),
+        ),
+      );
+
+      await refreshDashboardData();
+
+      const totals = results.reduce(
+        (accumulator, result) => ({
+          transactions: accumulator.transactions + result.transactions_upserted,
+          signals: accumulator.signals + result.signals_flagged,
+        }),
+        {
+          transactions: 0,
+          signals: 0,
+        },
+      );
+
+      setSyncMessage(
+        `Refresh complete across ${linkedInstitutions.length} institution${linkedInstitutions.length === 1 ? '' : 's'}. Upserted ${totals.transactions} transactions and flagged ${totals.signals} signals.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setSyncMessage(`Refresh failed: ${message}`);
+      Alert.alert('Refresh failed', message);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -117,12 +228,22 @@ export default function App() {
       <DashboardScreen
         functionsBaseUrl={appConfig.functionsBaseUrl}
         isConfigured={isSupabaseConfigured}
+        isSyncing={isSyncing}
         linkTokenPreview={linkTokenPreview}
-        onConnectPlaid={handlePlaidConnect}
+        linkedInstitutions={linkedInstitutions}
+        onRefreshSync={handleRefreshSync}
         onSignOut={session ? handleSignOut : undefined}
-        signals={mockSignals}
+        plaidAction={
+          <PlaidLinkLauncher
+            disabled={!session || isSyncing}
+            onLinkTokenCreated={setLinkTokenPreview}
+            onStatusChange={setSyncMessage}
+            onSuccess={handlePlaidSuccess}
+          />
+        }
+        signals={signals}
         syncMessage={syncMessage}
-        transactions={mockTransactions}
+        transactions={transactions}
         userEmail={session?.user.email ?? null}
       />
     </View>

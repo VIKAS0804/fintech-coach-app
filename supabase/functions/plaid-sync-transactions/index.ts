@@ -1,5 +1,6 @@
 import { corsHeaders, json } from '../_shared/cors.ts';
 import { getServiceClient, requireUser } from '../_shared/auth.ts';
+import { decryptString } from '../_shared/crypto.ts';
 import { plaidRequest } from '../_shared/plaid.ts';
 
 interface PlaidTransaction {
@@ -96,20 +97,42 @@ Deno.serve(async (request) => {
   try {
     const { user } = await requireUser(request);
     const { accessToken, cursor, itemId } = await request.json();
+    const service = getServiceClient();
+    let resolvedAccessToken = accessToken as string | undefined;
+    let resolvedCursor = cursor as string | null | undefined;
 
-    if (!accessToken) {
-      throw new Error('accessToken is required.');
+    if (!resolvedAccessToken) {
+      if (!itemId) {
+        throw new Error('Either accessToken or itemId is required.');
+      }
+
+      const { data: plaidItem, error: plaidItemError } = await service
+        .from('plaid_items')
+        .select('encrypted_access_token, cursor')
+        .eq('user_id', user.id)
+        .eq('plaid_item_id', itemId)
+        .maybeSingle();
+
+      if (plaidItemError) {
+        throw plaidItemError;
+      }
+
+      if (!plaidItem?.encrypted_access_token) {
+        throw new Error('No stored Plaid access token was found for this item.');
+      }
+
+      resolvedAccessToken = await decryptString(plaidItem.encrypted_access_token);
+      resolvedCursor = resolvedCursor ?? plaidItem.cursor;
     }
 
-    const service = getServiceClient();
     const pages: PlaidTransaction[] = [];
     const removedIds: string[] = [];
-    let nextCursor: string | null = cursor ?? null;
+    let nextCursor: string | null = resolvedCursor ?? null;
     let hasMore = true;
 
     while (hasMore) {
       const page = await plaidRequest<PlaidSyncPage>('/transactions/sync', {
-        access_token: accessToken,
+        access_token: resolvedAccessToken,
         cursor: nextCursor,
       });
 
@@ -120,7 +143,7 @@ Deno.serve(async (request) => {
     }
 
     const accountsPayload = await plaidRequest<{ accounts: PlaidAccount[] }>('/accounts/get', {
-      access_token: accessToken,
+      access_token: resolvedAccessToken,
     });
 
     const accountRows = accountsPayload.accounts.map((account) => ({

@@ -15,7 +15,8 @@ Impulse Coach is a React Native fintech coaching app built with Expo, TypeScript
 - A built-in Supabase email/password auth flow with persisted sessions
 - Supabase client wiring for authenticated edge-function calls
 - PostgreSQL schema with strict per-user data isolation through RLS
-- Plaid edge functions for link token creation, public-token exchange, transaction sync, and insight generation
+- Plaid edge functions for link token creation, encrypted public-token exchange, transaction sync, and insight generation
+- Official Plaid Link launchers for both web and native
 - Web build support so the app can be validated from desktop too
 
 ## Project structure
@@ -51,6 +52,14 @@ cp supabase/.env.example supabase/.env
 npm start
 ```
 
+For native Plaid Link testing, use a local development build instead of Expo Go:
+
+```bash
+npm run ios:devbuild
+# or
+npm run android:devbuild
+```
+
 5. Run the verification checks.
 
 ```bash
@@ -76,20 +85,36 @@ PLAID_CLIENT_ID=your-plaid-client-id
 PLAID_SECRET=your-plaid-secret
 PLAID_ENV=sandbox
 PLAID_VERSION=2020-09-14
+PLAID_REDIRECT_URI=https://your-app-domain.example.com
+PLAID_ACCESS_TOKEN_ENCRYPTION_KEY=replace-this-with-a-32-character-secret
 ```
 
 ## Supabase setup
 
 1. Create a Supabase project.
-2. Apply the SQL migration in `supabase/migrations/20260821071900_init_fintech_schema.sql`.
-3. Add the secrets from `supabase/.env.example` to your Supabase project.
-4. Deploy the edge functions.
+2. Log into the Supabase CLI.
 
 ```bash
-supabase functions deploy plaid-link-token
-supabase functions deploy plaid-exchange-public-token
-supabase functions deploy plaid-sync-transactions
-supabase functions deploy coach-insights
+npm run supabase:login
+```
+
+3. Link this repo to your Supabase project ref.
+
+```bash
+npm run supabase:link
+```
+
+4. Apply the SQL migration.
+
+```bash
+npm run supabase:db:push
+```
+
+5. Add the secrets from `supabase/.env.example` to your Supabase project.
+6. Deploy the edge functions.
+
+```bash
+npm run supabase:functions:deploy
 ```
 
 ## End-to-end flow
@@ -97,8 +122,8 @@ supabase functions deploy coach-insights
 1. The signed-in app user requests a Plaid link token from `plaid-link-token`.
 2. Plaid Link returns a `public_token` after bank authorization.
 3. The app exchanges that token through `plaid-exchange-public-token`.
-4. The backend stores the Plaid item metadata under the current user.
-5. The app triggers `plaid-sync-transactions` to ingest accounts and transactions.
+4. The backend encrypts and stores the Plaid access token under the current user.
+5. The app triggers `plaid-sync-transactions` to ingest accounts and transactions without exposing the access token back to the client.
 6. `coach-insights` summarizes recent user activity into high-signal coaching prompts.
 
 ## Verification
@@ -113,5 +138,6 @@ npm run build:web
 ## Notes
 
 - The repo is ready to run locally, but live Supabase and Plaid credentials are still required.
+- Plaid Link for React Native uses native code, so Expo Go is not sufficient. Use a development build for iOS or Android.
 - The data model is optimized for fast user-scoped reads through composite indexes and RLS.
-- The current UI includes the backend integration points and dashboard shell; live account-link launch still depends on your chosen Plaid Link client implementation for native/web.
+- The app now includes Plaid Link launch flows for native and web, but live linking still depends on your own Plaid Dashboard credentials, registered redirect URI, and Supabase deployment.

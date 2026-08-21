@@ -1,14 +1,18 @@
+import type { ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import type { SpendingSignal, Transaction } from '../types/fintech';
+import type { LinkedInstitution, SpendingSignal, Transaction } from '../types/fintech';
 import { formatCompactDate, formatCurrency, truncateToken } from '../utils/format';
 
 interface DashboardScreenProps {
   functionsBaseUrl: string;
   isConfigured: boolean;
+  isSyncing?: boolean;
   linkTokenPreview: string | null;
-  onConnectPlaid: () => void | Promise<void>;
+  linkedInstitutions: LinkedInstitution[];
+  onRefreshSync?: () => void | Promise<void>;
   onSignOut?: () => void | Promise<void>;
+  plaidAction: ReactNode;
   signals: SpendingSignal[];
   syncMessage: string;
   transactions: Transaction[];
@@ -41,9 +45,12 @@ function getLevelAccent(level: SpendingSignal['level']) {
 export function DashboardScreen({
   functionsBaseUrl,
   isConfigured,
+  isSyncing,
   linkTokenPreview,
-  onConnectPlaid,
+  linkedInstitutions,
+  onRefreshSync,
   onSignOut,
+  plaidAction,
   signals,
   syncMessage,
   transactions,
@@ -106,9 +113,16 @@ export function DashboardScreen({
             Functions endpoint: {functionsBaseUrl || 'Waiting for EXPO_PUBLIC_SUPABASE_URL'}
           </Text>
 
-          <Pressable onPress={onConnectPlaid} style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>Generate Plaid link token</Text>
-          </Pressable>
+          <View style={styles.actionRow}>
+            {plaidAction}
+            <Pressable
+              disabled={!onRefreshSync || isSyncing}
+              onPress={onRefreshSync}
+              style={[styles.secondaryButton, !onRefreshSync || isSyncing ? styles.buttonDisabled : null]}
+            >
+              <Text style={styles.secondaryButtonText}>Refresh synced data</Text>
+            </Pressable>
+          </View>
 
           {linkTokenPreview ? (
             <View style={styles.tokenPreview}>
@@ -116,6 +130,19 @@ export function DashboardScreen({
               <Text style={styles.tokenValue}>{truncateToken(linkTokenPreview)}</Text>
             </View>
           ) : null}
+
+          <View style={styles.institutionBlock}>
+            <Text style={styles.tokenLabel}>Linked institutions</Text>
+            {linkedInstitutions.length > 0 ? (
+              linkedInstitutions.map((institution) => (
+                <Text key={institution.plaidItemId} style={styles.institutionRow}>
+                  {institution.institutionName ?? 'Unnamed institution'} / {institution.status}
+                </Text>
+              ))
+            ) : (
+              <Text style={styles.emptyText}>No institutions linked yet.</Text>
+            )}
+          </View>
         </View>
 
         <View style={styles.card}>
@@ -135,49 +162,57 @@ export function DashboardScreen({
         <View style={styles.card}>
           <Text style={styles.cardEyebrow}>COACHING SIGNALS</Text>
           <Text style={styles.cardTitle}>Latest spending behaviors to review</Text>
-          {signals.map((signal) => (
-            <View key={signal.id} style={styles.signalCard}>
-              <View
-                style={[
-                  styles.signalBadge,
-                  {
-                    backgroundColor: getLevelAccent(signal.level),
-                  },
-                ]}
-              />
-              <View style={styles.signalCopy}>
-                <View style={styles.signalHeader}>
-                  <Text style={styles.signalTitle}>{signal.title}</Text>
-                  <Text style={styles.signalScore}>{signal.score}</Text>
+          {signals.length > 0 ? (
+            signals.map((signal) => (
+              <View key={signal.id} style={styles.signalCard}>
+                <View
+                  style={[
+                    styles.signalBadge,
+                    {
+                      backgroundColor: getLevelAccent(signal.level),
+                    },
+                  ]}
+                />
+                <View style={styles.signalCopy}>
+                  <View style={styles.signalHeader}>
+                    <Text style={styles.signalTitle}>{signal.title}</Text>
+                    <Text style={styles.signalScore}>{signal.score}</Text>
+                  </View>
+                  <Text style={styles.signalMeta}>
+                    {signal.merchantName} / {formatCurrency(signal.amount)} /{' '}
+                    {formatCompactDate(signal.detectedAt)}
+                  </Text>
+                  <Text style={styles.signalReason}>{signal.reason}</Text>
+                  <Text style={styles.signalSuggestion}>{signal.suggestion}</Text>
                 </View>
-                <Text style={styles.signalMeta}>
-                  {signal.merchantName} / {formatCurrency(signal.amount)} /{' '}
-                  {formatCompactDate(signal.detectedAt)}
-                </Text>
-                <Text style={styles.signalReason}>{signal.reason}</Text>
-                <Text style={styles.signalSuggestion}>{signal.suggestion}</Text>
               </View>
-            </View>
-          ))}
+            ))
+          ) : (
+            <Text style={styles.emptyText}>Connect a bank to generate live coaching signals.</Text>
+          )}
         </View>
 
         <View style={[styles.card, styles.bottomCard]}>
           <Text style={styles.cardEyebrow}>SYNCED TRANSACTIONS</Text>
           <Text style={styles.cardTitle}>Recent activity stream</Text>
-          {transactions.map((transaction) => (
-            <View key={transaction.id} style={styles.transactionRow}>
-              <View style={styles.transactionCopy}>
-                <Text style={styles.transactionTitle}>{transaction.displayName}</Text>
-                <Text style={styles.transactionMeta}>
-                  {transaction.merchantName} / {transaction.category.join(' > ')}
-                </Text>
+          {transactions.length > 0 ? (
+            transactions.map((transaction) => (
+              <View key={transaction.id} style={styles.transactionRow}>
+                <View style={styles.transactionCopy}>
+                  <Text style={styles.transactionTitle}>{transaction.displayName}</Text>
+                  <Text style={styles.transactionMeta}>
+                    {transaction.merchantName} / {transaction.category.join(' > ')}
+                  </Text>
+                </View>
+                <View style={styles.transactionAmountWrap}>
+                  <Text style={styles.transactionAmount}>{formatCurrency(transaction.amount)}</Text>
+                  <Text style={styles.transactionDate}>{formatCompactDate(transaction.postedDate)}</Text>
+                </View>
               </View>
-              <View style={styles.transactionAmountWrap}>
-                <Text style={styles.transactionAmount}>{formatCurrency(transaction.amount)}</Text>
-                <Text style={styles.transactionDate}>{formatCompactDate(transaction.postedDate)}</Text>
-              </View>
-            </View>
-          ))}
+            ))
+          ) : (
+            <Text style={styles.emptyText}>No synced transactions yet.</Text>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -328,18 +363,27 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 14,
   },
-  primaryButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#F97360',
-    borderRadius: 999,
+  actionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
     marginTop: 18,
+  },
+  secondaryButton: {
+    borderColor: '#29406B',
+    borderRadius: 999,
+    borderWidth: 1,
     paddingHorizontal: 18,
     paddingVertical: 12,
   },
-  primaryButtonText: {
-    color: '#081226',
+  secondaryButtonText: {
+    color: '#F8FAFC',
     fontSize: 14,
-    fontWeight: '900',
+    fontWeight: '800',
+  },
+  buttonDisabled: {
+    opacity: 0.55,
   },
   tokenPreview: {
     marginTop: 16,
@@ -356,6 +400,15 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  institutionBlock: {
+    marginTop: 16,
+  },
+  institutionRow: {
+    color: '#D6E3F8',
+    fontSize: 14,
+    lineHeight: 22,
+    marginTop: 6,
   },
   blueprintRow: {
     color: '#D6E3F8',
@@ -413,6 +466,12 @@ const styles = StyleSheet.create({
     color: '#6EE7B7',
     fontSize: 14,
     lineHeight: 21,
+  },
+  emptyText: {
+    color: '#8CA0C1',
+    fontSize: 14,
+    lineHeight: 22,
+    marginTop: 10,
   },
   transactionRow: {
     flexDirection: 'row',

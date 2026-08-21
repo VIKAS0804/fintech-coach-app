@@ -34,6 +34,7 @@ create table if not exists public.plaid_items (
   user_id uuid not null references public.profiles (id) on delete cascade,
   plaid_item_id text not null unique,
   institution_name text,
+  encrypted_access_token text,
   status text not null default 'active',
   cursor text,
   created_at timestamptz not null default timezone('utc', now()),

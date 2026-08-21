@@ -32,7 +32,6 @@ export interface PlaidLinkTokenResponse {
 export interface PlaidExchangePublicTokenResponse {
   item_id: string;
   institution_name: string | null;
-  access_token: string;
   request_id?: string;
 }
 
@@ -48,6 +47,13 @@ export interface CoachingSignalSummary {
   signalsFlagged: number;
   discretionarySpend: number;
   averageTicket: number;
+}
+
+export interface LinkedInstitution {
+  plaidItemId: string;
+  institutionName: string | null;
+  status: string;
+  cursor: string | null;
 }
 
 export interface CoachingSignalResponse {
