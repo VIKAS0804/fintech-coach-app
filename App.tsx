@@ -29,6 +29,7 @@ export default function App() {
   const [isSessionLoading, setIsSessionLoading] = useState(isSupabaseConfigured);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState(initialSyncMessage);
+  const [lastInsightsAt, setLastInsightsAt] = useState<string | null>(new Date().toISOString());
   const [linkTokenPreview, setLinkTokenPreview] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>(mockTransactions);
   const [signals, setSignals] = useState<SpendingSignal[]>(mockSignals);
@@ -69,13 +70,23 @@ export default function App() {
       setTransactions(mockTransactions);
       setSignals(mockSignals);
       setLinkedInstitutions([]);
+      setLastInsightsAt(new Date().toISOString());
+      setSyncMessage(
+        isSupabaseConfigured
+          ? initialSyncMessage
+          : 'Mock mode is active. Add Supabase keys to unlock live Plaid sync, secure auth, and per-user isolation.',
+      );
       return;
     }
 
     void refreshDashboardData();
   }, [session]);
 
-  const refreshDashboardData = async () => {
+  const refreshDashboardData = async ({
+    preserveMessage = false,
+  }: {
+    preserveMessage?: boolean;
+  } = {}) => {
     if (!session || !isSupabaseConfigured) {
       return;
     }
@@ -90,19 +101,36 @@ export default function App() {
       setTransactions(recentTransactions);
       setSignals(signalResponse.signals);
       setLinkedInstitutions(institutions);
+      setLastInsightsAt(signalResponse.generated_at);
 
-      if (institutions.length === 0) {
-        setSyncMessage('No linked banks yet. Use Plaid Link to connect your first institution.');
-      } else {
-        setSyncMessage(
-          `Connected ${institutions.length} institution${institutions.length === 1 ? '' : 's'}. Latest sync flagged ${signalResponse.summary.signalsFlagged} coaching signals.`,
-        );
+      if (!preserveMessage) {
+        if (institutions.length === 0) {
+          setSyncMessage('No linked banks yet. Use Plaid Link to connect your first institution.');
+        } else {
+          setSyncMessage(
+            `Connected ${institutions.length} institution${institutions.length === 1 ? '' : 's'}. Latest sync flagged ${signalResponse.summary.signalsFlagged} coaching signals.`,
+          );
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      setSyncMessage(`Live dashboard refresh is blocked: ${message}`);
+      if (!preserveMessage) {
+        setSyncMessage(`Live dashboard refresh is blocked: ${message}`);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!session || !isSupabaseConfigured) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void refreshDashboardData({ preserveMessage: true });
+    }, 60_000);
+
+    return () => clearInterval(intervalId);
+  }, [session]);
 
   const handlePlaidSuccess = async ({
     accountsCount,
@@ -124,7 +152,7 @@ export default function App() {
         itemId: exchange.item_id,
       });
 
-      await refreshDashboardData();
+      await refreshDashboardData({ preserveMessage: true });
       setLinkTokenPreview(null);
       setSyncMessage(
         `Connected ${exchange.institution_name ?? institutionName ?? 'your institution'}. Synced ${syncResponse.transactions_upserted} transactions and flagged ${syncResponse.signals_flagged} signals.`,
@@ -166,7 +194,7 @@ export default function App() {
         ),
       );
 
-      await refreshDashboardData();
+      await refreshDashboardData({ preserveMessage: true });
 
       const totals = results.reduce(
         (accumulator, result) => ({
@@ -229,6 +257,7 @@ export default function App() {
         functionsBaseUrl={appConfig.functionsBaseUrl}
         isConfigured={isSupabaseConfigured}
         isSyncing={isSyncing}
+        lastInsightsAt={lastInsightsAt}
         linkTokenPreview={linkTokenPreview}
         linkedInstitutions={linkedInstitutions}
         onRefreshSync={handleRefreshSync}

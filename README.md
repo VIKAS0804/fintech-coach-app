@@ -11,12 +11,14 @@ Impulse Coach is a React Native fintech coaching app built with Expo, TypeScript
 
 ## What is included
 
-- A mobile-first dashboard for discretionary spend, recent transactions, and coaching signals
+- A mobile-first dashboard for discretionary spend, safe-to-spend guidance, recent transactions, and coaching signals
 - A built-in Supabase email/password auth flow with persisted sessions
 - Supabase client wiring for authenticated edge-function calls
 - PostgreSQL schema with strict per-user data isolation through RLS
 - Plaid edge functions for link token creation, encrypted public-token exchange, transaction sync, and insight generation
 - Official Plaid Link launchers for both web and native
+- Pattern scoring for merchant loops, spend sprees, category spikes, and high-ticket purchases
+- A free mock-data demo path that runs entirely on desktop without paid services
 - Web build support so the app can be validated from desktop too
 
 ## Project structure
@@ -124,7 +126,14 @@ npm run supabase:functions:deploy
 3. The app exchanges that token through `plaid-exchange-public-token`.
 4. The backend encrypts and stores the Plaid access token under the current user.
 5. The app triggers `plaid-sync-transactions` to ingest accounts and transactions without exposing the access token back to the client.
-6. `coach-insights` summarizes recent user activity into high-signal coaching prompts.
+6. Shared scoring logic inside the edge layer classifies merchant loops, spend sprees, category spikes, and high-ticket purchases.
+7. `coach-insights` summarizes recent user activity into watchlist merchants, safe-to-spend guidance, and high-signal coaching prompts.
+
+## Free usage path
+
+- Desktop demo: run `npm run web` and use the built-in mock data with no Supabase or Plaid account required
+- Supabase: the project is compatible with Supabase's free tier for Auth, Postgres, and Edge Functions
+- Plaid: the live bank-linking flow can be tested with Plaid Sandbox credentials before spending money
 
 ## Verification
 

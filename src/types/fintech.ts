@@ -1,4 +1,10 @@
 export type SignalLevel = 'low' | 'medium' | 'high';
+export type SignalTag = 'merchant-loop' | 'category-spike' | 'spend-spree' | 'high-ticket';
+
+export interface PatternBreakdownItem {
+  tag: SignalTag;
+  count: number;
+}
 
 export interface Transaction {
   id: string;
@@ -15,12 +21,14 @@ export interface SpendingSignal {
   id: string;
   merchantName: string;
   title: string;
+  tag: SignalTag;
   reason: string;
   suggestion: string;
   score: number;
   level: SignalLevel;
   detectedAt: string;
   amount: number;
+  patternCount: number;
 }
 
 export interface PlaidLinkTokenResponse {
@@ -47,6 +55,10 @@ export interface CoachingSignalSummary {
   signalsFlagged: number;
   discretionarySpend: number;
   averageTicket: number;
+  safeToSpend: number;
+  highestSignalScore: number;
+  watchlistMerchants: string[];
+  patternBreakdown: PatternBreakdownItem[];
 }
 
 export interface LinkedInstitution {

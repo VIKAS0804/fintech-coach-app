@@ -1,13 +1,20 @@
 import type { ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { buildDashboardSummary, getSignalTagLabel } from '../lib/coach';
 import type { LinkedInstitution, SpendingSignal, Transaction } from '../types/fintech';
-import { formatCompactDate, formatCurrency, truncateToken } from '../utils/format';
+import {
+  formatCompactDate,
+  formatCurrency,
+  formatRelativeTime,
+  truncateToken,
+} from '../utils/format';
 
 interface DashboardScreenProps {
   functionsBaseUrl: string;
   isConfigured: boolean;
   isSyncing?: boolean;
+  lastInsightsAt: string | null;
   linkTokenPreview: string | null;
   linkedInstitutions: LinkedInstitution[];
   onRefreshSync?: () => void | Promise<void>;
@@ -17,18 +24,6 @@ interface DashboardScreenProps {
   syncMessage: string;
   transactions: Transaction[];
   userEmail?: string | null;
-}
-
-function getDiscretionarySpend(transactions: Transaction[]) {
-  return transactions.reduce((sum, transaction) => {
-    const topCategory = transaction.category[0]?.toLowerCase() ?? '';
-    const isDiscretionary =
-      topCategory.includes('food') ||
-      topCategory.includes('general merchandise') ||
-      topCategory.includes('entertainment');
-
-    return isDiscretionary ? sum + transaction.amount : sum;
-  }, 0);
 }
 
 function getLevelAccent(level: SpendingSignal['level']) {
@@ -42,10 +37,22 @@ function getLevelAccent(level: SpendingSignal['level']) {
   }
 }
 
+function getLevelLabel(level: SpendingSignal['level']) {
+  switch (level) {
+    case 'high':
+      return 'High risk';
+    case 'medium':
+      return 'Watch';
+    default:
+      return 'Monitor';
+  }
+}
+
 export function DashboardScreen({
   functionsBaseUrl,
   isConfigured,
   isSyncing,
+  lastInsightsAt,
   linkTokenPreview,
   linkedInstitutions,
   onRefreshSync,
@@ -56,9 +63,8 @@ export function DashboardScreen({
   transactions,
   userEmail,
 }: DashboardScreenProps) {
-  const discretionarySpend = getDiscretionarySpend(transactions);
-  const safeToSpend = Math.max(0, 1200 - discretionarySpend);
-  const flaggedSignals = signals.filter((signal) => signal.level !== 'low').length;
+  const summary = buildDashboardSummary(transactions, signals);
+  const primarySignal = signals[0] ?? null;
 
   return (
     <View style={styles.root}>
@@ -69,8 +75,8 @@ export function DashboardScreen({
         <Text style={styles.kicker}>REAL-TIME MONEY COACH</Text>
         <Text style={styles.title}>Catch impulse spending before it snowballs.</Text>
         <Text style={styles.subtitle}>
-          React Native front end, Supabase auth + RLS, Plaid transaction sync, and edge analytics
-          tuned for fast user-scoped reads.
+          React Native, TypeScript, Supabase auth + RLS, Plaid transaction sync, PostgreSQL, and
+          edge analytics built around user-scoped spending patterns.
         </Text>
         {userEmail ? (
           <View style={styles.sessionRow}>
@@ -86,31 +92,100 @@ export function DashboardScreen({
         <View style={styles.metricsRow}>
           <View style={styles.metricCard}>
             <Text style={styles.metricLabel}>Discretionary spend</Text>
-            <Text style={styles.metricValue}>{formatCurrency(discretionarySpend)}</Text>
-            <Text style={styles.metricHint}>last 7 days</Text>
+            <Text style={styles.metricValue}>{formatCurrency(summary.discretionarySpend)}</Text>
+            <Text style={styles.metricHint}>recent synced activity</Text>
           </View>
 
           <View style={styles.metricCard}>
             <Text style={styles.metricLabel}>Signals flagged</Text>
-            <Text style={styles.metricValue}>{flaggedSignals}</Text>
-            <Text style={styles.metricHint}>high + medium</Text>
+            <Text style={styles.metricValue}>{summary.signalsFlagged}</Text>
+            <Text style={styles.metricHint}>active behavior patterns</Text>
           </View>
 
           <View style={styles.metricCard}>
             <Text style={styles.metricLabel}>Safe to spend</Text>
-            <Text style={styles.metricValue}>{formatCurrency(safeToSpend)}</Text>
-            <Text style={styles.metricHint}>after cushions</Text>
+            <Text style={styles.metricValue}>{formatCurrency(summary.safeToSpend)}</Text>
+            <Text style={styles.metricHint}>after risk buffer</Text>
+          </View>
+
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>Watchlist merchants</Text>
+            <Text style={styles.metricValue}>{summary.watchlistMerchants.length}</Text>
+            <Text style={styles.metricHint}>repeat pressure points</Text>
+          </View>
+        </View>
+
+        <View style={[styles.card, styles.pulseCard]}>
+          <Text style={styles.cardEyebrow}>COACH PULSE</Text>
+          <Text style={styles.cardTitle}>
+            {primarySignal ? primarySignal.title : 'No high-risk patterns detected yet'}
+          </Text>
+          <Text style={styles.cardBody}>
+            {primarySignal
+              ? primarySignal.reason
+              : 'Once transactions start syncing, this panel highlights the strongest impulse-spending behavior in plain English.'}
+          </Text>
+
+          <View style={styles.pulseRow}>
+            <View style={styles.pulsePill}>
+              <Text style={styles.pulsePillLabel}>Last refresh</Text>
+              <Text style={styles.pulsePillValue}>{formatRelativeTime(lastInsightsAt)}</Text>
+            </View>
+            <View style={styles.pulsePill}>
+              <Text style={styles.pulsePillLabel}>Peak score</Text>
+              <Text style={styles.pulsePillValue}>{summary.highestSignalScore || 0}</Text>
+            </View>
+          </View>
+
+          {primarySignal ? (
+            <View style={styles.nextMoveBox}>
+              <Text style={styles.nextMoveLabel}>Next coaching move</Text>
+              <Text style={styles.nextMoveText}>{primarySignal.suggestion}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardEyebrow}>PATTERN RADAR</Text>
+          <Text style={styles.cardTitle}>What the engine is seeing right now</Text>
+          <View style={styles.patternGrid}>
+            {summary.patternBreakdown.map((pattern) => (
+              <View key={pattern.tag} style={styles.patternChip}>
+                <Text style={styles.patternCount}>{pattern.count}</Text>
+                <Text style={styles.patternLabel}>{getSignalTagLabel(pattern.tag)}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.watchlistSection}>
+            <Text style={styles.tokenLabel}>Watchlist merchants</Text>
+            {summary.watchlistMerchants.length > 0 ? (
+              <View style={styles.watchlistRow}>
+                {summary.watchlistMerchants.map((merchant) => (
+                  <View key={merchant} style={styles.watchlistChip}>
+                    <Text style={styles.watchlistChipText}>{merchant}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>No merchants are repeatedly triggering alerts yet.</Text>
+            )}
           </View>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardEyebrow}>PLAID + SUPABASE</Text>
           <Text style={styles.cardTitle}>
-            {isConfigured ? 'Backend wiring is ready.' : 'Finish environment setup to go live.'}
+            {isConfigured ? 'Live bank sync pipeline is ready.' : 'Finish environment setup to go live.'}
           </Text>
           <Text style={styles.cardBody}>{syncMessage}</Text>
           <Text style={styles.endpointLabel}>
             Functions endpoint: {functionsBaseUrl || 'Waiting for EXPO_PUBLIC_SUPABASE_URL'}
+          </Text>
+          <Text style={styles.refreshHint}>
+            {isConfigured
+              ? 'Signed-in sessions quietly refresh dashboard reads every 60 seconds.'
+              : 'This desktop demo uses local mock data until Supabase and Plaid are configured.'}
           </Text>
 
           <View style={styles.actionRow}>
@@ -118,7 +193,10 @@ export function DashboardScreen({
             <Pressable
               disabled={!onRefreshSync || isSyncing}
               onPress={onRefreshSync}
-              style={[styles.secondaryButton, !onRefreshSync || isSyncing ? styles.buttonDisabled : null]}
+              style={[
+                styles.secondaryButton,
+                !onRefreshSync || isSyncing ? styles.buttonDisabled : null,
+              ]}
             >
               <Text style={styles.secondaryButtonText}>Refresh synced data</Text>
             </Pressable>
@@ -147,21 +225,27 @@ export function DashboardScreen({
 
         <View style={styles.card}>
           <Text style={styles.cardEyebrow}>BACKEND BLUEPRINT</Text>
-          <Text style={styles.cardTitle}>What ships in this scaffold</Text>
+          <Text style={styles.cardTitle}>How this matches the fintech coaching brief</Text>
           <Text style={styles.blueprintRow}>
-            RLS: profiles, plaid_items, accounts, transactions, coaching_signals
+            Stack: React Native, TypeScript, Supabase, PostgreSQL, Plaid, and edge functions.
           </Text>
           <Text style={styles.blueprintRow}>
-            Edge functions: plaid-link-token, plaid-sync-transactions, coach-insights
+            Isolation: RLS protects profiles, plaid_items, accounts, transactions, and
+            coaching_signals per authenticated user.
           </Text>
           <Text style={styles.blueprintRow}>
-            Performance: user-scoped indexes, cursor sync, summarized coaching reads
+            Detection: shared edge scoring flags merchant loops, spend sprees, category spikes,
+            and high-ticket purchases from synced transaction data.
+          </Text>
+          <Text style={styles.blueprintRow}>
+            Performance target: indexed user-scoped reads and summarized coaching responses aimed
+            at sub-200ms dashboard calls after deployment tuning.
           </Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardEyebrow}>COACHING SIGNALS</Text>
-          <Text style={styles.cardTitle}>Latest spending behaviors to review</Text>
+          <Text style={styles.cardTitle}>Latest behaviors to review</Text>
           {signals.length > 0 ? (
             signals.map((signal) => (
               <View key={signal.id} style={styles.signalCard}>
@@ -178,6 +262,26 @@ export function DashboardScreen({
                     <Text style={styles.signalTitle}>{signal.title}</Text>
                     <Text style={styles.signalScore}>{signal.score}</Text>
                   </View>
+
+                  <View style={styles.signalPillRow}>
+                    <View
+                      style={[
+                        styles.signalPill,
+                        {
+                          borderColor: getLevelAccent(signal.level),
+                        },
+                      ]}
+                    >
+                      <Text style={styles.signalPillText}>{getLevelLabel(signal.level)}</Text>
+                    </View>
+                    <View style={styles.signalPill}>
+                      <Text style={styles.signalPillText}>{getSignalTagLabel(signal.tag)}</Text>
+                    </View>
+                    <View style={styles.signalPill}>
+                      <Text style={styles.signalPillText}>{signal.patternCount} related hits</Text>
+                    </View>
+                  </View>
+
                   <Text style={styles.signalMeta}>
                     {signal.merchantName} / {formatCurrency(signal.amount)} /{' '}
                     {formatCompactDate(signal.detectedAt)}
@@ -206,7 +310,10 @@ export function DashboardScreen({
                 </View>
                 <View style={styles.transactionAmountWrap}>
                   <Text style={styles.transactionAmount}>{formatCurrency(transaction.amount)}</Text>
-                  <Text style={styles.transactionDate}>{formatCompactDate(transaction.postedDate)}</Text>
+                  <Text style={styles.transactionDate}>
+                    {formatCompactDate(transaction.postedDate)}
+                    {transaction.pending ? ' / pending' : ''}
+                  </Text>
                 </View>
               </View>
             ))
@@ -270,12 +377,6 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     marginBottom: 28,
   },
-  metricsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginHorizontal: -6,
-    marginBottom: 20,
-  },
   sessionRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -299,6 +400,12 @@ const styles = StyleSheet.create({
     color: '#F8FAFC',
     fontSize: 12,
     fontWeight: '800',
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -6,
+    marginBottom: 20,
   },
   metricCard: {
     flexGrow: 1,
@@ -335,6 +442,9 @@ const styles = StyleSheet.create({
     padding: 20,
     marginBottom: 18,
   },
+  pulseCard: {
+    backgroundColor: '#0E1D38',
+  },
   bottomCard: {
     marginBottom: 0,
   },
@@ -357,11 +467,109 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
+  pulseRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -5,
+    marginTop: 16,
+  },
+  pulsePill: {
+    backgroundColor: '#132342',
+    borderColor: '#27406B',
+    borderWidth: 1,
+    borderRadius: 18,
+    marginHorizontal: 5,
+    marginBottom: 10,
+    minWidth: 130,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  pulsePillLabel: {
+    color: '#8CA0C1',
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  pulsePillValue: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  nextMoveBox: {
+    marginTop: 10,
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: '#132342',
+  },
+  nextMoveLabel: {
+    color: '#7DD3FC',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  nextMoveText: {
+    color: '#D6E3F8',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  patternGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -6,
+  },
+  patternChip: {
+    backgroundColor: '#111F39',
+    borderColor: '#253859',
+    borderWidth: 1,
+    borderRadius: 20,
+    marginHorizontal: 6,
+    marginBottom: 12,
+    minWidth: 140,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  patternCount: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  patternLabel: {
+    color: '#8CA0C1',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  watchlistSection: {
+    marginTop: 8,
+  },
+  watchlistRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 4,
+  },
+  watchlistChip: {
+    backgroundColor: '#17305A',
+    borderRadius: 999,
+    marginRight: 8,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  watchlistChipText: {
+    color: '#E2E8F0',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   endpointLabel: {
     color: '#5EEAD4',
     fontSize: 13,
     lineHeight: 20,
     marginTop: 14,
+  },
+  refreshHint: {
+    color: '#8CA0C1',
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 8,
   },
   actionRow: {
     alignItems: 'center',
@@ -437,7 +645,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   signalTitle: {
     color: '#F8FAFC',
@@ -450,6 +658,25 @@ const styles = StyleSheet.create({
     color: '#7DD3FC',
     fontSize: 18,
     fontWeight: '900',
+  },
+  signalPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 8,
+  },
+  signalPill: {
+    borderColor: '#29406B',
+    borderWidth: 1,
+    borderRadius: 999,
+    marginRight: 8,
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  signalPillText: {
+    color: '#D6E3F8',
+    fontSize: 12,
+    fontWeight: '700',
   },
   signalMeta: {
     color: '#8CA0C1',

@@ -1,6 +1,10 @@
 import { corsHeaders, json } from '../_shared/cors.ts';
 import { getServiceClient, requireUser } from '../_shared/auth.ts';
 import { decryptString } from '../_shared/crypto.ts';
+import {
+  analyzeImpulseSignals,
+  type InsightTransaction,
+} from '../_shared/insights.ts';
 import { plaidRequest } from '../_shared/plaid.ts';
 
 interface PlaidTransaction {
@@ -39,50 +43,6 @@ interface PlaidSyncPage {
   removed: Array<{ transaction_id: string }>;
   next_cursor: string;
   has_more: boolean;
-}
-
-function scoreSignal(transaction: PlaidTransaction, peerTransactions: PlaidTransaction[]) {
-  const merchantKey = (transaction.merchant_name ?? transaction.name).toLowerCase();
-  const categoryPrimary = transaction.personal_finance_category?.primary?.toLowerCase() ?? '';
-  const similarTransactions = peerTransactions.filter((item) => {
-    const peerMerchant = (item.merchant_name ?? item.name).toLowerCase();
-    return peerMerchant === merchantKey && item.transaction_id !== transaction.transaction_id;
-  });
-
-  let score = 10;
-  const reasons: string[] = [];
-
-  if (transaction.amount >= 75) {
-    score += 30;
-    reasons.push('large single purchase');
-  }
-
-  if (
-    categoryPrimary.includes('food') ||
-    categoryPrimary.includes('entertainment') ||
-    categoryPrimary.includes('general merchandise')
-  ) {
-    score += 20;
-    reasons.push('discretionary category');
-  }
-
-  if (similarTransactions.length > 0) {
-    score += 25;
-    reasons.push('repeat merchant in recent sync');
-  }
-
-  if (score < 45) {
-    return null;
-  }
-
-  return {
-    level: score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low',
-    score: Math.min(score, 100),
-    tag: similarTransactions.length > 0 ? 'repeat-merchant' : 'high-ticket',
-    reason: `Flagged due to ${reasons.join(', ')}.`,
-    suggestion:
-      'Create a 24-hour cool-off rule for non-essential purchases and recheck the need after the delay.',
-  };
 }
 
 Deno.serve(async (request) => {
@@ -213,32 +173,39 @@ Deno.serve(async (request) => {
       }
     }
 
-    const signalRows = (savedTransactions ?? [])
-      .map((transaction) => {
-        const sourceTransaction = pages.find((entry) => entry.transaction_id === transaction.plaid_transaction_id);
+    const { data: recentTransactions, error: recentTransactionsError } = await service
+      .from('transactions')
+      .select('id, amount, category, merchant_name, name, posted_date, channel')
+      .eq('user_id', user.id)
+      .is('removed_at', null)
+      .order('posted_date', { ascending: false })
+      .limit(120);
 
-        if (!sourceTransaction) {
-          return null;
-        }
+    if (recentTransactionsError) {
+      throw recentTransactionsError;
+    }
 
-        const signal = scoreSignal(sourceTransaction, pages);
+    const insightTransactions: InsightTransaction[] = (recentTransactions ?? []).map((transaction) => ({
+      id: String(transaction.id),
+      amount: Number(transaction.amount),
+      category: Array.isArray(transaction.category) ? transaction.category.map((value) => String(value)) : [],
+      merchantName: String(transaction.merchant_name ?? transaction.name),
+      displayName: String(transaction.name),
+      postedDate: String(transaction.posted_date),
+      channel: transaction.channel ? String(transaction.channel) : null,
+    }));
 
-        if (!signal) {
-          return null;
-        }
-
-        return {
-          user_id: user.id,
-          transaction_id: transaction.id,
-          level: signal.level,
-          tag: signal.tag,
-          score: signal.score,
-          reason: signal.reason,
-          suggestion: signal.suggestion,
-          detected_at: new Date().toISOString(),
-        };
-      })
-      .filter(Boolean);
+    const generatedSignals = analyzeImpulseSignals(insightTransactions);
+    const signalRows = generatedSignals.map((signal) => ({
+      user_id: user.id,
+      transaction_id: signal.transactionId,
+      level: signal.level,
+      tag: signal.tag,
+      score: signal.score,
+      reason: signal.reason,
+      suggestion: signal.suggestion,
+      detected_at: new Date().toISOString(),
+    }));
 
     if (signalRows.length > 0) {
       const { error: signalsError } = await service
@@ -247,6 +214,23 @@ Deno.serve(async (request) => {
 
       if (signalsError) {
         throw signalsError;
+      }
+    }
+
+    const generatedTransactionIds = new Set(signalRows.map((signal) => signal.transaction_id));
+    const staleTransactionIds = insightTransactions
+      .map((transaction) => transaction.id)
+      .filter((transactionId) => !generatedTransactionIds.has(transactionId));
+
+    if (staleTransactionIds.length > 0) {
+      const { error: cleanupError } = await service
+        .from('coaching_signals')
+        .delete()
+        .eq('user_id', user.id)
+        .in('transaction_id', staleTransactionIds);
+
+      if (cleanupError) {
+        throw cleanupError;
       }
     }
 
@@ -270,7 +254,7 @@ Deno.serve(async (request) => {
       next_cursor: nextCursor,
       accounts_synced: accountRows.length,
       transactions_upserted: transactionRows.length,
-      signals_flagged: signalRows.length,
+      signals_flagged: generatedSignals.length,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error.';

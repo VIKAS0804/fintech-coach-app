@@ -1,5 +1,10 @@
 import { corsHeaders, json } from '../_shared/cors.ts';
 import { getServiceClient, requireUser } from '../_shared/auth.ts';
+import {
+  analyzeImpulseSignals,
+  buildInsightSummary,
+  type InsightTransaction,
+} from '../_shared/insights.ts';
 
 interface StoredTransaction {
   id: string;
@@ -8,50 +13,7 @@ interface StoredTransaction {
   merchant_name: string | null;
   name: string;
   posted_date: string;
-}
-
-function buildSignal(transaction: StoredTransaction, peers: StoredTransaction[]) {
-  const merchant = (transaction.merchant_name ?? transaction.name).toLowerCase();
-  const category = transaction.category[0]?.toLowerCase() ?? '';
-  const sameMerchantCount = peers.filter((peer) => {
-    const peerMerchant = (peer.merchant_name ?? peer.name).toLowerCase();
-    return peer.id !== transaction.id && peerMerchant === merchant;
-  }).length;
-
-  let score = 15;
-  const reasons: string[] = [];
-
-  if (transaction.amount >= 70) {
-    score += 25;
-    reasons.push('high ticket amount');
-  }
-
-  if (
-    category.includes('food') ||
-    category.includes('general merchandise') ||
-    category.includes('entertainment')
-  ) {
-    score += 20;
-    reasons.push('discretionary category');
-  }
-
-  if (sameMerchantCount > 0) {
-    score += 25;
-    reasons.push('repeat merchant behavior');
-  }
-
-  if (score < 50) {
-    return null;
-  }
-
-  return {
-    level: score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low',
-    score: Math.min(score, 100),
-    tag: sameMerchantCount > 0 ? 'repeat-merchant' : 'category-spike',
-    reason: `Detected from ${reasons.join(', ')}.`,
-    suggestion:
-      'Move the next planned discretionary spend into a dedicated allowance bucket before purchase.',
-  };
+  channel: string | null;
 }
 
 Deno.serve(async (request) => {
@@ -71,7 +33,7 @@ Deno.serve(async (request) => {
 
     const { data: transactions, error } = await service
       .from('transactions')
-      .select('id, amount, category, merchant_name, name, posted_date')
+      .select('id, amount, category, merchant_name, name, posted_date, channel')
       .eq('user_id', user.id)
       .is('removed_at', null)
       .order('posted_date', { ascending: false })
@@ -82,30 +44,31 @@ Deno.serve(async (request) => {
     }
 
     const typedTransactions = (transactions ?? []) as StoredTransaction[];
-    const generatedSignals = typedTransactions
-      .map((transaction) => {
-        const signal = buildSignal(transaction, typedTransactions);
+    const insightTransactions: InsightTransaction[] = typedTransactions.map((transaction) => ({
+      id: transaction.id,
+      amount: transaction.amount,
+      category: Array.isArray(transaction.category) ? transaction.category : [],
+      merchantName: transaction.merchant_name ?? transaction.name,
+      displayName: transaction.name,
+      postedDate: transaction.posted_date,
+      channel: transaction.channel,
+    }));
 
-        if (!signal) {
-          return null;
-        }
-
-        return {
-          id: `generated-${transaction.id}`,
-          merchantName: transaction.merchant_name ?? transaction.name,
-          title: signal.tag === 'repeat-merchant' ? 'Repeat spend pattern' : 'Category spike',
-          reason: signal.reason,
-          suggestion: signal.suggestion,
-          score: signal.score,
-          level: signal.level,
-          detectedAt: transaction.posted_date,
-          amount: transaction.amount,
-          transaction_id: transaction.id,
-          tag: signal.tag,
-        };
-      })
-      .filter(Boolean)
-      .sort((left, right) => right.score - left.score);
+    const generatedInsights = analyzeImpulseSignals(insightTransactions);
+    const generatedSignals = generatedInsights.map((signal) => ({
+      id: `generated-${signal.transactionId}`,
+      merchantName: signal.merchantName,
+      title: signal.title,
+      tag: signal.tag,
+      reason: signal.reason,
+      suggestion: signal.suggestion,
+      score: signal.score,
+      level: signal.level,
+      detectedAt: signal.detectedAt,
+      amount: signal.amount,
+      patternCount: signal.patternCount,
+      transaction_id: signal.transactionId,
+    }));
 
     const signalRows = generatedSignals.map((signal) => ({
       user_id: user.id,
@@ -128,31 +91,27 @@ Deno.serve(async (request) => {
       }
     }
 
-    const discretionarySpend = typedTransactions.reduce((sum, transaction) => {
-      const topCategory = transaction.category[0]?.toLowerCase() ?? '';
-      const isDiscretionary =
-        topCategory.includes('food') ||
-        topCategory.includes('general merchandise') ||
-        topCategory.includes('entertainment');
+    const generatedTransactionIds = new Set(signalRows.map((signal) => signal.transaction_id));
+    const staleTransactionIds = insightTransactions
+      .map((transaction) => transaction.id)
+      .filter((transactionId) => !generatedTransactionIds.has(transactionId));
 
-      return isDiscretionary ? sum + transaction.amount : sum;
-    }, 0);
+    if (staleTransactionIds.length > 0) {
+      const { error: cleanupError } = await service
+        .from('coaching_signals')
+        .delete()
+        .eq('user_id', user.id)
+        .in('transaction_id', staleTransactionIds);
 
-    const averageTicket =
-      typedTransactions.length > 0
-        ? typedTransactions.reduce((sum, transaction) => sum + transaction.amount, 0) /
-          typedTransactions.length
-        : 0;
+      if (cleanupError) {
+        throw cleanupError;
+      }
+    }
 
     return json({
       generated_at: new Date().toISOString(),
       signals: generatedSignals.slice(0, limit),
-      summary: {
-        transactionsReviewed: typedTransactions.length,
-        signalsFlagged: generatedSignals.length,
-        discretionarySpend,
-        averageTicket,
-      },
+      summary: buildInsightSummary(insightTransactions, generatedInsights),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error.';
